@@ -58,48 +58,97 @@ func main() {
 	case "z":
 		buf := new(bytes.Buffer)
 		zipArchive := zip.NewWriter(buf)
-		Archivate(*pathFlag, zipArchive, "");
-		err := zipArchive.Close()
-		fatal(err)
-		ZipMetaFile, err := CreateMeta(metaData)
-		MainZip := new(bytes.Buffer)
-		ml := make([]byte, 4)
-		binary.LittleEndian.PutUint32(ml, uint32(ZipMetaFile.Len()))
-		MainZip.Write(ml)
-		MainZip.Write(ZipMetaFile.Bytes())
-		MainZip.Write(buf.Bytes())
-		SignZip(*certFlag, *keyFlag, *outputFlag, MainZip)
-
-	case "x":
-		err := Extract()
-		fatal(err)
-
-	case "i":
-		sign, err := Verify()
+		err := Archivate(*pathFlag, zipArchive, "");
 		if err != nil {
 			log.Printf(err.Error())
 			return
-		} else {
-			fmt.Println("Sign is verified")
 		}
-		if *hashFlag != "" {
-			signer := sign.GetOnlySigner()
-			if *hashFlag == strings.ToUpper(fmt.Sprintf("%x", sha1.Sum(signer.Raw))) {
-				fmt.Println("Hashes are equal!")
-			} else {
-				fmt.Println("Hashes are not equal! Sing is broken")
-			}
+		err = zipArchive.Close()
+		if err != nil {
+			log.Printf(err.Error())
+			return
 		}
-		data := sign.Content
-		buf, mlen, err := ReadMeta(data)
-		mlen = mlen
-		fmt.Printf(string(buf.Bytes()))
+		ZipMetaFile, err := CreateMeta(metaData)
+		if err != nil {
+			log.Printf(err.Error())
+			return
+		}
+		MainZip := new(bytes.Buffer)
+		ml := make([]byte, 4)
+		binary.LittleEndian.PutUint32(ml, uint32(ZipMetaFile.Len()))
+		_, err = MainZip.Write(ml)
+		if err != nil {
+			log.Printf(err.Error())
+			return
+		}
+		_, err = MainZip.Write(ZipMetaFile.Bytes())
+		if err != nil {
+			log.Printf(err.Error())
+			return
+		}
+		_, err = MainZip.Write(buf.Bytes())
+		if err != nil {
+			log.Printf(err.Error())
+			return
+		}
+		err = SignZip(*certFlag, *keyFlag, *outputFlag, MainZip)
+		if err != nil {
+			log.Printf(err.Error())
+			return
+		}
+
+	case "x":
+		err := Extract()
+		if err != nil {
+			log.Printf(err.Error())
+			return
+		}
+
+	case "i":
+		err := zipInfo()
+		if err != nil {
+			log.Printf(err.Error())
+			return
+		}
 	}
+}
+
+func zipInfo()(error){
+	sign, err := Verify()
+	if err != nil {
+		log.Printf(err.Error())
+		return err
+	} else {
+		fmt.Println("Sign is verified")
+	}
+	if *hashFlag != "" {
+		signer := sign.GetOnlySigner()
+		if *hashFlag == strings.ToUpper(fmt.Sprintf("%x", sha1.Sum(signer.Raw))) {
+			fmt.Println("Hashes are equal!")
+		} else {
+			fmt.Println("Hashes are not equal! Sing is broken")
+		}
+	}
+	data := sign.Content
+	buf, mlen, err := ReadMeta(data)
+	if err != nil {
+		log.Printf(err.Error())
+		return err
+	}
+	mlen = mlen
+	fmt.Printf(string(buf.Bytes()))
+	return nil
 }
 
 func Extract() error {
 	sign, err := Verify()
+	if err != nil {
+		return err
+	}
 	data, err := ioutil.ReadFile(*outputFlag)
+	if err != nil {
+		return err
+	}
 	if err != nil {
 		return err
 	}
@@ -115,6 +164,9 @@ func Extract() error {
 	}
 	data = sign.Content
 	buf, mlen, err := ReadMeta(data)
+	if err != nil {
+		return err
+	}
 	dzip := data[mlen+4:]
 	yamlMeta := new(meta)
 	err = yaml.Unmarshal(buf.Bytes(), yamlMeta)
@@ -131,6 +183,9 @@ func Extract() error {
 		return err
 	}
 	err = os.Mkdir("extract", fm)
+	if err != nil {
+		return err
+	}
 	p := "./extract"
 	i := 0
 	for _, f := range r.File {
@@ -158,6 +213,9 @@ func Extract() error {
 			
 			h := sha1.New()
 			fileHash, err := ioutil.ReadFile(filepath.Join(p, f.Name))
+			if err != nil {
+				return err
+			}
 			h.Write(fileHash)
 			hash := base64.URLEncoding.EncodeToString(h.Sum(nil))
 			if hash == yamlMeta.File[i].Hash {
@@ -177,7 +235,6 @@ func ReadMeta(data []byte) (*bytes.Buffer, uint32, error) {
 
 	m, err := zip.NewReader(bytes.NewReader(bmeta), int64(len(bmeta)))
 	if err != nil {
-		fatal(err)
 		return nil, mlen, err
 	}
 
@@ -186,103 +243,133 @@ func ReadMeta(data []byte) (*bytes.Buffer, uint32, error) {
 
 	st, err := f.Open()
 	if err != nil {
-		fatal(err)
 		return nil, mlen, err
 	}
 	_, err = io.Copy(buf, st)
 	if err != nil {
-		fatal(err)
 		return nil, mlen, err
 	}
 	return buf, mlen, nil
 }
 
-func fatal(err error){
-	if err != nil {
-		log.Printf(err.Error())
-	}
-}
-
 func Verify() (sign *pkcs7.PKCS7, err error) {
 	szip, err := ioutil.ReadFile(*outputFlag)
 	if err != nil {
-		fatal(err)
 		return nil, err
 	}
 	sign, err = pkcs7.Parse(szip)
 	if err != nil {
-		fatal(err)
 		return sign, err
 	}
 	err = sign.Verify()
 	
 	if err != nil {
-		fatal(err)
 		return sign, err
 	}
 	return sign, nil
 }
 
-func Archivate(path string, zipArchive *zip.Writer, dirName string){
+func Archivate(path string, zipArchive *zip.Writer, dirName string) (error){
 	files, err := ioutil.ReadDir(path)
-	fatal(err)
+	if err != nil {
+		return err
+	}
 	md := new(sFile)
 	for _, file := range files {
 		fileInfo, err := os.Lstat(path + "/" + file.Name())
-		fatal(err)
+		if err != nil {
+			return err
+		}
 		if (fileInfo.IsDir()){
 			_, err := zipArchive.Create(filepath.Join(dirName,file.Name()) + "/")
-			fatal(err)
-			Archivate(filepath.Join(path, file.Name()), zipArchive, filepath.Join(dirName, file.Name()) + "/")
+			if err != nil {
+				return err
+			}
+			err = Archivate(filepath.Join(path, file.Name()), zipArchive, filepath.Join(dirName, file.Name()) + "/")
+			if err != nil {
+				return err
+			}
 		} else { 
 			fInfo, err := zip.FileInfoHeader(fileInfo)
-			fatal(err)
+			if err != nil {
+				return err
+			}
 			fInfo.Name = dirName + fInfo.Name
 			f, err := zipArchive.CreateHeader(fInfo)
+			if err != nil {
+				return err
+			}
 			data, err := ioutil.ReadFile(filepath.Join(path, file.Name()))
+			if err != nil {
+				return err
+			}
 			fillMeta(fInfo,data, md)
-			fatal(err)
 			_, err = f.Write([]byte(data));
-			fatal(err)
+			if err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
-func SignZip(cert string, key string, Output string, zipFile *bytes.Buffer) {
+func SignZip(cert string, key string, Output string, zipFile *bytes.Buffer) (error) {
 	signedData, err := pkcs7.NewSignedData(zipFile.Bytes())
-	fatal(err)
+	if err != nil {
+		return err
+	}
 	certFile, err := ioutil.ReadFile(cert)
 	certBlock, _ := pem.Decode(certFile)
 	recpcert, err := x509.ParseCertificate(certBlock.Bytes)
-	fatal(err)
+	if err != nil {
+		return err
+	}
 	pkeyFile, err := ioutil.ReadFile(key)
 	block, _ := pem.Decode(pkeyFile)
 	parseResult, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	fatal(err)
+	if err != nil {
+		return err
+	}
 	var recpkey *rsa.PrivateKey
 	recpkey = parseResult.(*rsa.PrivateKey)
 	signedData.AddSigner(recpcert, recpkey, pkcs7.SignerInfoConfig{})
-	fatal(err)
+	if err != nil {
+		return err
+	}
 	detachedSignature, err := signedData.Finish()
-	fatal(err)
+	if err != nil {
+		return err
+	}
 	sz, err := os.Create(Output)
-	fatal(err)
+	if err != nil {
+		return err
+	}
 	defer sz.Close()
-	sz.Write(detachedSignature)
+	_, err = sz.Write(detachedSignature)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func CreateMeta(met []sFile) (*bytes.Buffer, error) {
 	var l meta
 	l.File = met
 	output, err := yaml.Marshal(l)
-	fatal(err)
+	if err != nil {
+		return nil, err
+	}
 	MetaBuf := new(bytes.Buffer)
 	zipMetaWriter := zip.NewWriter(MetaBuf)
+	defer zipMetaWriter.Close()
 	m, err := zipMetaWriter.Create("meta.yaml")
-	fatal(err)
-	m.Write(output)
-	err = zipMetaWriter.Close()
-	fatal(err)
+	if err != nil {
+		return nil, err
+	}
+	_, err = m.Write(output)
+	if err != nil {
+		return nil, err
+	}
 	return MetaBuf, nil
 }
 
@@ -294,6 +381,5 @@ func fillMeta(fileInfo *zip.FileHeader, file []byte, md *sFile){
 	hash := sha1.New()
 	hash.Write(file)
 	md.Hash = base64.URLEncoding.EncodeToString(hash.Sum(nil))
-	fmt.Println(md.Hash)
 	metaData = append(metaData, *md)
 }
