@@ -149,9 +149,6 @@ func Extract() error {
 	if err != nil {
 		return err
 	}
-	if err != nil {
-		return err
-	}
 	signer := sign.GetOnlySigner()
 	if *hashFlag != "" {
 		if *hashFlag == strings.ToUpper(fmt.Sprintf("%x", sha1.Sum(signer.Raw))) {
